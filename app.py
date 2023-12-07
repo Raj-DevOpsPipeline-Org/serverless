@@ -57,22 +57,50 @@ def send_email(
     to_email,
     user_first_name,
     user_last_name,
-    subject,
-    content,
+    submission_url,
     assignment_id,
+    file_url,
+    file_name,
+    status,
+    failure_reason,
     submission_count,
 ):
+    if status == "success":
+        subject = f"Assignment Submission Confirmation - {assignment_id}"
+        content = (
+            f"Hello {user_first_name} {user_last_name},<br><br>"
+            f"Your submission for Assignment {assignment_id} has been successfully received and processed.<br><br>"
+            f"Your submission details are as follows:<br>"
+            f"- Assignment ID: {assignment_id}<br>"
+            f"- File Name: {file_name}<br>"
+            f"- Submission URL: {submission_url}<br><br>"
+            f"You can download your submitted file at the following link: "
+            f"<a href='{file_url}'>{file_url}</a><br><br>"
+        )
+    else:
+        subject = f"Assignment Submission Error - {assignment_id}"
+        content = (
+            f"Hello {user_first_name} {user_last_name},<br><br>"
+            f"There was an issue with your submission for Assignment {assignment_id}.<br><br>"
+            "The following issue was encountered:<br>"
+            f"- {failure_reason}<br><br>"
+            f"Your submission details are as follows:<br>"
+            f"- Assignment ID: {assignment_id}<br>"
+            f"- File Name: {file_name}<br>"
+            f"- Submission URL: {submission_url}<br><br>"
+            f"To successfully submit your assignment, please ensure that:<br>"
+            f"- The file is in the correct format (.zip).<br>"
+            f"- The submission is made before the due date"
+        )
+
+    message = Mail(
+        from_email="noreply@demo.rajss.me",
+        to_emails=to_email,
+        subject=subject,
+        html_content=content,
+    )
+    sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
     try:
-        personalized_content = (
-            f"Hello {user_first_name} {user_last_name},<br><br>{content}<br><br>Thanks"
-        )
-        message = Mail(
-            from_email="noreply@demo.rajss.me",
-            to_emails=to_email,
-            subject=subject,
-            html_content=personalized_content,
-        )
-        sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
         response = sg.send(message)
         logger.info(f"Email sent to {to_email} with status code {response.status_code}")
         update_email_tracking(to_email, "Sent", assignment_id, submission_count)
@@ -90,62 +118,72 @@ def lambda_handler(event, context):
     user_last_name = message["user_last_name"]
     assignment_id = message["assignment_id"]
     submission_count = message["submission_count"]
+    user_email = "srinivasan.sup@northeastern.edu"
 
     try:
         response = requests.get(submission_url)
         file_name = os.path.basename(submission_url)
-        if response.status_code == 200:
-            file = BytesIO(response.content)
-            if zipfile.is_zipfile(file):
-                credentials_json = json.loads(gcp_key_decoded)
-                credentials = service_account.Credentials.from_service_account_info(
-                    credentials_json
-                )
-                storage_client = storage.Client(
-                    credentials=credentials, project=credentials.project_id
-                )
-                bucket_name = storage_client.bucket(os.getenv("GCP_BUCKET_NAME"))
-                upload_blob(
-                    bucket_name,
-                    response.content,
-                    f"{user_first_name}_{user_last_name}/{assignment_id}/attempt_{submission_count}/{file_name}",
-                )
-                file_url = f"{bucket_base_url}/{bucket_name.name}/{user_first_name}_{user_last_name}/{assignment_id}/attempt_{submission_count}/{file_name}"
-
-                # Send success email
-                send_email(
-                    user_email,
-                    user_first_name,
-                    user_last_name,
-                    f"Assignment {assignment_id} Submission Successful",
-                    f"Your submission for Assignment {assignment_id} has been successfully uploaded. <br>You can download your submission at: {file_url}",
-                    assignment_id,
-                    submission_count,
-                )
-            else:
-                logger.error("Downloaded file is not a zip file")
-                send_email(
-                    user_email,
-                    user_first_name,
-                    user_last_name,
-                    f"Assignment {assignment_id} Submission Failed",
-                    f"Your submission for Assignment {assignment_id} failed because the submitted file ('{file_name}') is not a .zip file. Please submit the file in .zip format.",
-                    assignment_id,
-                    submission_count,
-                )
-                update_email_tracking(
-                    user_email, "Failed", assignment_id, submission_count
-                )
-
-        else:
-            logger.error(f"Failed to download file: HTTP {response.status_code}")
+        file = BytesIO(response.content)
+        file_url = ""
+        logger.info(f"Response received from submission URL - {response.status_code}")
+        logger.info(f"Downloaded file from submission URL - {file}")
+        if response.status_code == 200 and zipfile.is_zipfile(file):
+            credentials_json = json.loads(gcp_key_decoded)
+            credentials = service_account.Credentials.from_service_account_info(
+                credentials_json
+            )
+            storage_client = storage.Client(
+                credentials=credentials, project=credentials.project_id
+            )
+            bucket_name = storage_client.bucket(os.getenv("GCP_BUCKET_NAME"))
+            upload_blob(
+                bucket_name,
+                response.content,
+                f"{user_first_name}_{user_last_name}/{assignment_id}/attempt_{submission_count}/{file_name}",
+            )
+            file_url = f"{bucket_base_url}/{bucket_name.name}/{user_first_name}_{user_last_name}/{assignment_id}/attempt_{submission_count}/{file_name}"
+            # Send success email
             send_email(
                 user_email,
                 user_first_name,
                 user_last_name,
-                f"Assignment {assignment_id} Submission Failed",
-                f"There was an error downloading the Assignment {assignment_id} and processing it.",
+                submission_url,
                 assignment_id,
+                file_url,
+                file_name,
+                "success",
+                None,
+                submission_count,
+            )
+        elif response.status_code == 200 and not zipfile.is_zipfile(file):
+            failure_reason = f"Your submission for Assignment {assignment_id} failed because the submitted file ('{file_name}') is not a .zip file. Please submit the file in .zip format."
+            logger.error("Downloaded file is not a zip file")
+            send_email(
+                user_email,
+                user_first_name,
+                user_last_name,
+                submission_url,
+                assignment_id,
+                file_url,
+                file_name,
+                "failure",
+                failure_reason,
+                submission_count,
+            )
+            update_email_tracking(user_email, "Failed", assignment_id, submission_count)
+        else:
+            failure_reason = f"There was an error downloading the Assignment {assignment_id} and processing it."
+            logger.error("Downloaded file is not a zip file")
+            send_email(
+                user_email,
+                user_first_name,
+                user_last_name,
+                submission_url,
+                assignment_id,
+                file_url,
+                file_name,
+                "failure",
+                failure_reason,
                 submission_count,
             )
             update_email_tracking(user_email, "Failed", assignment_id, submission_count)
@@ -155,9 +193,12 @@ def lambda_handler(event, context):
             user_email,
             user_first_name,
             user_last_name,
-            f"Assignment {assignment_id} Submission Failed",
-            "There was an error processing your submission.",
+            submission_url,
             assignment_id,
+            None,
+            None,
+            "failure",
+            "There was an error processing your submission.",
             submission_count,
         )
         update_email_tracking(user_email, "Failed", assignment_id, submission_count)
