@@ -64,40 +64,45 @@ def send_email(
     status,
     failure_reason,
     submission_count,
+    total_attempts,
+    assignment_name,
 ):
     if status == "success":
-        subject = f"Assignment Submission Confirmation - {assignment_id}"
+        logger.info("Sending success email")
+        subject = f"Assignment Submission Confirmation - {assignment_name}"
         content = (
-            f"Hello {user_first_name} {user_last_name},<br><br>"
-            f"Your submission for Assignment {assignment_id} has been successfully received and processed.<br><br>"
-            f"Your submission details are as follows:<br>"
-            f"- Assignment ID: {assignment_id}<br>"
-            f"- File Name: {file_name}<br>"
-            f"- Submission URL: {submission_url}<br><br>"
-            f"You can download your submitted file at the following link: "
-            f"<a href='{file_url}'>{file_url}</a><br><br>"
+            f"Hello {user_first_name} {user_last_name},\n"
+            f"Your submission for Assignment {assignment_name} has been successfully uploaded.\n"
+            f"Your submission details are as follows:\n"  
+            f"- Assignment Name: {assignment_name}\n"
+            f"- File Name: {file_name}\n"
+            f"- Submission Attempt: {submission_count}/{total_attempts}\n"
+            f"- Submission URL: {submission_url}\n"
+            f"You can download your submission at: {file_url}"
         )
     else:
-        subject = f"Assignment Submission Error - {assignment_id}"
+        logger.info("Sending error email")
+        subject = f"Assignment Submission Error - {assignment_name}"
         content = (
-            f"Hello {user_first_name} {user_last_name},<br><br>"
-            f"There was an issue with your submission for Assignment {assignment_id}.<br><br>"
-            "The following issue was encountered:<br>"
-            f"- {failure_reason}<br><br>"
-            f"Your submission details are as follows:<br>"
-            f"- Assignment ID: {assignment_id}<br>"
-            f"- File Name: {file_name}<br>"
-            f"- Submission URL: {submission_url}<br><br>"
-            f"To successfully submit your assignment, please ensure that:<br>"
-            f"- The file is in the correct format (.zip).<br>"
-            f"- The submission is made before the due date"
+            f"Hello {user_first_name} {user_last_name},\n\n"
+            f"There was an issue with your submission for Assignment - {assignment_name}.\n\n"
+            "The following issue was encountered:\n"
+            f"- {failure_reason}\n\n"
+            f"Your submission details are as follows:\n"
+            f"- Assignment Name: {assignment_name}\n"
+            f"- File Name: {file_name}\n"
+            f"- Submission Attempt: {submission_count}/{total_attempts}\n"
+            f"- Submission URL: {submission_url}\n\n"
+            f"To successfully submit your assignment, please ensure that:\n"
+            f"- The file is in the correct format (.zip).\n"
+            f"- The submission is made before the due date."
         )
 
     message = Mail(
         from_email="noreply@demo.rajss.me",
         to_emails=to_email,
         subject=subject,
-        html_content=content,
+        plain_text_content=content,
     )
     sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
     try:
@@ -118,7 +123,8 @@ def lambda_handler(event, context):
     user_last_name = message["user_last_name"]
     assignment_id = message["assignment_id"]
     submission_count = message["submission_count"]
-    user_email = "srinivasan.sup@northeastern.edu"
+    total_attempts = message["total_attempts"]
+    assignment_name = message["assignment_name"]
 
     try:
         response = requests.get(submission_url)
@@ -126,7 +132,6 @@ def lambda_handler(event, context):
         file = BytesIO(response.content)
         file_url = ""
         logger.info(f"Response received from submission URL - {response.status_code}")
-        logger.info(f"Downloaded file from submission URL - {file}")
         if response.status_code == 200 and zipfile.is_zipfile(file):
             credentials_json = json.loads(gcp_key_decoded)
             credentials = service_account.Credentials.from_service_account_info(
@@ -154,9 +159,11 @@ def lambda_handler(event, context):
                 "success",
                 None,
                 submission_count,
+                total_attempts,
+                assignment_name,
             )
         elif response.status_code == 200 and not zipfile.is_zipfile(file):
-            failure_reason = f"Your submission for Assignment {assignment_id} failed because the submitted file ('{file_name}') is not a .zip file. Please submit the file in .zip format."
+            failure_reason = f"Your submission for Assignment ({assignment_name}) failed because the submitted file ('{file_name}') is not a .zip file. Please submit the file in .zip format."
             logger.error("Downloaded file is not a zip file")
             send_email(
                 user_email,
@@ -169,10 +176,12 @@ def lambda_handler(event, context):
                 "failure",
                 failure_reason,
                 submission_count,
+                total_attempts,
+                assignment_name,
             )
             update_email_tracking(user_email, "Failed", assignment_id, submission_count)
         else:
-            failure_reason = f"There was an error downloading the Assignment {assignment_id} and processing it."
+            failure_reason = f"There was an error downloading the Assignment ({assignment_name}) and processing it."
             logger.error("Downloaded file is not a zip file")
             send_email(
                 user_email,
@@ -185,6 +194,8 @@ def lambda_handler(event, context):
                 "failure",
                 failure_reason,
                 submission_count,
+                total_attempts,
+                assignment_name,
             )
             update_email_tracking(user_email, "Failed", assignment_id, submission_count)
     except Exception as e:
@@ -200,6 +211,8 @@ def lambda_handler(event, context):
             "failure",
             "There was an error processing your submission.",
             submission_count,
+            total_attempts,
+            assignment_name,
         )
         update_email_tracking(user_email, "Failed", assignment_id, submission_count)
     return message
